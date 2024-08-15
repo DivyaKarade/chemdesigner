@@ -11,7 +11,7 @@ from io import BytesIO
 RDLogger.DisableLog("rdApp.*")
 
 # Streamlit app code
-st.title("Molecule Graph Generator")
+st.title("ChemDesigner: Molecule Graph Generator")
 
 # Sidebar for CSV upload
 with st.sidebar:
