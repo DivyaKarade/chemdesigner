@@ -1,0 +1,11 @@
+rdkit-pypi
+keras
+tensorflow
+streamlit
+pandas
+numpy
+
+
+
+
+
