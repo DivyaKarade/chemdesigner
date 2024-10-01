@@ -1,12 +1,15 @@
 import streamlit as st
 from rdkit import Chem, RDLogger
-from rdkit.Chem import Draw
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 import pandas as pd
 import io  # Imported io module to capture model summaries
-from io import BytesIO
+from rdkit.Chem import Draw, rdMolDescriptors, Crippen, PandasTools
+from itertools import chain
+from rdkit.Chem import FilterCatalog
+from PIL import Image
+import base64
 
 # Page expands to full width
 st.set_page_config(page_title='AIDrugApp', page_icon='🌐', layout="wide")
@@ -21,11 +24,15 @@ expander_bar.markdown("""
         """)
 
 expander_bar = st.expander("👉 How to use ChemDesigner?")
-expander_bar.markdown("""**Step 1:** In the User input-side panel, upload your input CSV file containing SMILES data. (*Example input file provided*)""")
-expander_bar.markdown("""**Step 2:** In the "Select Atoms" section, choose the atoms you want to include in your analysis. (*Ensure that your SMILES strings in the uploaded CSV file contain only the atoms you selected in the "Select Atoms" section.*)""")
+expander_bar.markdown(
+    """**Step 1:** In the User input-side panel, upload your input CSV file containing SMILES data. (*Example input file provided*)""")
+expander_bar.markdown(
+    """**Step 2:** In the "Select Atoms" section, choose the atoms you want to include in your analysis. (*Ensure that your SMILES strings in the uploaded CSV file contain only the atoms you selected in the "Select Atoms" section.*)""")
 expander_bar.markdown("""**Step 3:** In the "Select Bonds" section, choose the types of chemical bonds to include.""")
-expander_bar.markdown("""**Step 4:** In the "Set Parameters" section, adjust the hyperparameters for training the GAN.""")
-expander_bar.markdown("""**Step 5:** Click the "✨ Generate Molecules" button in the sidebar to start the molecule generation process.""")
+expander_bar.markdown(
+    """**Step 4:** In the "Set Parameters" section, adjust the hyperparameters for training the GAN.""")
+expander_bar.markdown(
+    """**Step 5:** Click the "✨ Generate Molecules" button in the sidebar to start the molecule generation process.""")
 
 """---"""
 
@@ -33,7 +40,6 @@ st.sidebar.header('⚙️ USER INPUT PANEL')
 
 # Disable RDKit logging
 RDLogger.DisableLog("rdApp.*")
-
 
 # Sidebar for CSV upload
 with st.sidebar:
@@ -507,11 +513,9 @@ if st.sidebar.button("✨ Generate Molecules"):
     wgan = GraphWGAN(generator, discriminator, discriminator_steps=1)
 
     wgan.compile(
-        optimizer_generator=keras.optimizers.Adam(5e-4),
-        optimizer_discriminator=keras.optimizers.Adam(5e-4),
+        optimizer_generator=tf.keras.optimizers.Adam(5e-4),
+        optimizer_discriminator=tf.keras.optimizers.Adam(5e-4),
     )
-
-    #wgan.fit([adjacency_tensor, feature_tensor], epochs=epochs, batch_size=batch_size)
 
     st.subheader("Training the WGAN-GP Model")
     st.info("Training might take a few minutes depending on the dataset size and system performance.")
@@ -529,12 +533,12 @@ if st.sidebar.button("✨ Generate Molecules"):
     def sample(generator, batch_size):
         z = tf.random.normal((batch_size, LATENT_DIM))
         graph = generator.predict(z)
-        # obtain one-hot encoded adjacency tensor
+        # Obtain one-hot encoded adjacency tensor
         adjacency = tf.argmax(graph[0], axis=1)
         adjacency = tf.one_hot(adjacency, depth=BOND_DIM, axis=1)
         # Remove potential self-loops from adjacency
         adjacency = tf.linalg.set_diag(adjacency, tf.zeros(tf.shape(adjacency)[:-1]))
-        # obtain one-hot encoded feature tensor
+        # Obtain one-hot encoded feature tensor
         features = tf.argmax(graph[1], axis=2)
         features = tf.one_hot(features, depth=ATOM_DIM, axis=2)
         return [
@@ -556,3 +560,463 @@ if st.sidebar.button("✨ Generate Molecules"):
             returnPNG=False
         )
     )
+
+    # Dictionary of functional group SMARTS patterns
+    acceptable_groups = {
+        # Acceptable functional groups
+        "amine": 'C(N)',  # Generally accepted; can form hydrogen bonds.
+        "Aromatic": 'c1ccccc1',  # Provides planarity; useful in interactions.
+        "Aliphatic cyclic": 'C1CCCCC1',  # Provides rigidity; beneficial in drug design.
+        "Nitrile": 'C#N',  # Stable and can enhance biological activity.
+        "Phenol": 'c1ccccc1O',  # Commonly used; can participate in hydrogen bonding.
+        "Sulfonic acid": 'S(=O)(=O)(O)',  # Stable; can improve solubility and bioactivity.
+        "Thioether": 'C-S-C',  # Usually acceptable; can exhibit varying reactivity.
+        "Sulfide": 'C-S-C',  # Usually acceptable; can exhibit varying reactivity.
+        "Urea": 'C(=O)N(N)',  # Stable; used in various pharmaceutical compounds.
+        "Sulfamide": 'S(=O)(=O)N',  # Stable and can be used in drug design.
+        "Cyclopropane": 'C1CC1',  # Provides ring strain; can enhance reactivity.
+        "Cyclobutane": 'C1CCC1',  # Provides rigidity; useful in drug design.
+        "Pyridine": 'c1ccncc1',  # Heterocyclic compound; often used in drug design for its properties.
+        "Thiazole": 'c1sccn1',  # Heterocyclic; known for bioactivity in various compounds.
+        "Imidazole": 'c1ncccn1',  # Heterocyclic; important in drug design.
+        "Furan": 'c1ccoc1',  # Heterocyclic; sometimes used in pharmaceuticals.
+        "Oxime": 'C(=N-O)',  # Useful in drug synthesis.
+        "Triazole": 'c1nnn1',  # Important in drug design; has diverse applications.
+        "Carboxylic acid": 'C(=O)O',
+        # Acceptable; common in drug design for functionality and interaction with biological targets.
+        "Aliphatic long chain": 'C*',
+        # Generally acceptable; long chains can enhance lipid solubility, aiding in absorption.
+        "Alcohol": 'C(O)',  # Generally acceptable; widely used in pharmaceuticals for solubility and reactivity.
+        "Ketone": 'C(=O)C',  # Generally acceptable; common functional group that can participate in hydrogen bonding.
+        "Ester": 'C(=O)O[C]',  # Generally acceptable; used in prodrugs for improved bioavailability.
+        "Amine": 'C(N)',  # Generally acceptable; essential for many drugs due to their role in receptor interactions.
+        "Ether": 'C-O-C',  # Generally acceptable; often used in pharmaceuticals for their stability and low reactivity.
+        "Fluoride": 'C(F)',  # Individual halides; generally acceptable; can enhance bioactivity through fluorination.
+        "Chloride": 'C(Cl)',
+        # Individual halides; generally acceptable; can influence lipophilicity and biological activity.
+        "Bromide": 'C(Br)',  # Individual halides; generally acceptable; used to modulate drug properties.
+        "Iodide": 'C(I)',
+        # Individual halides; generally acceptable; iodinated compounds can have specific therapeutic applications.
+        "Phosphate": 'P(=O)(O)(O)O',
+        # Generally acceptable; crucial in biological processes and drug design (e.g., nucleotides).
+        "Amide": 'C(=O)N',
+        # Generally acceptable; prevalent in drug design for its stability and ability to form hydrogen bonds.
+        "Quaternary ammonium": '[N+]',
+        # Generally acceptable; used in drug design for enhanced solubility and transport properties.
+        "Isolated alkene": 'C=C',
+        # Generally acceptable; common in organic compounds; can be involved in various reactions.
+        "2-halo pyridine": 'n1ccccc1[X]',
+        # Where X = F, Cl, Br, I; generally acceptable; used for specific biological interactions.
+        "Oxygen-nitrogen single bond": 'O-N',
+        # Generally acceptable; can enhance hydrogen bonding and molecular interactions.
+        "Quaternary nitrogen": '[N+](C)(C)(C)(C)',  # Generally acceptable; often used in drug design for solubility.
+        "Triple bond": 'C#C',
+        # Generally acceptable; common in organic compounds, influencing reactivity and stability.
+        "Phosphor": 'P',
+        # Generally acceptable; context-dependent; phosphorous compounds can have therapeutic applications.
+        "Diketo group": 'C(=O)C(=O)',  # Generally acceptable; can participate in chelation and molecular interactions.
+        "Three-membered heterocycle": '[r3]',
+        # Generally acceptable; often found in pharmaceuticals for diverse activities.
+    }
+
+    # Dictionary of functional group SMARTS patterns
+    acceptable_with_caution_groups = {
+        # Sometimes acceptable (requires caution)
+        "Hydroxylamine": 'N(O)=C',  # Can be unstable and reactive; should be approached with caution.
+        "Carbamate": 'C(=O)N(C)C',  # Stable but should be monitored for potential toxicity.
+        "Hydrazone": 'C=N-N',  # May have undesirable reactivity; caution advised.
+        "Alkyne": 'C#C',  # Highly reactive; generally requires caution.
+        "Aldehyde": 'C(=O)[H]',  # Reactive; can lead to side reactions.
+        "Secondary amine": 'C(N)[C]',  # Generally acceptable; requires caution due to potential reactivity.
+        "Tertiary amine": 'C(N)(N)',  # Generally acceptable; can participate in hydrogen bonding but may be reactive.
+        "Anhydride": 'C(=O)OC(=O)',  # Can be reactive; should be used cautiously due to hydrolysis risks.
+        "Dithiol": 'C(S)(S)',  # Can form reactive species; caution is advised.
+        "Tetrahydrofuran": 'C1CCOC1',  # Generally stable; commonly used but should be monitored.
+        "imine": 'C=NC',  # Generally acceptable; can form stable structures but may be reactive in certain conditions.
+        "Phenol": 'c1ccccc1O',  # Can be toxic in high concentrations; serves as a crucial component in many drugs.
+        "Thiol": 'C(S)',
+        # Generally acceptable; although some thiols can be toxic, many have essential biological roles.
+        "Alkyl halide": 'C[X]',
+        # Where X = F, Cl, Br, I; generally acceptable but requires caution due to potential toxicity.
+        "Iodine": 'C(I)',  # Individual halides; generally acceptable with caution; iodine is essential in some drugs.
+        "Charged oxygen or sulfur atoms": '[O-]|[S-]',
+        # Generally acceptable; can participate in nucleophilic reactions but may be reactive.
+        "Het-C-het not in ring": 'C[!C][!C]',  # Generally acceptable; context-dependent; can be stable or reactive.
+        "N oxide": 'N(=O)[O-]',  # Generally acceptable; depends on context; can be involved in biological processes.
+        "Halogenated ring": 'c1ccccc1[X]',
+        # Where X = F, Cl, Br, I; generally acceptable but requires caution due to reactivity.
+        "Thioester": 'C(=S)OC',  # Generally acceptable; context-dependent; can have significant biological roles.
+    }
+
+    # Dictionary of functional group SMARTS patterns
+    toxic_groups = {
+        # Toxic functional groups
+        "Chlorinated compounds": 'C(Cl)',
+        # Potentially toxic; can lead to organochlorine accumulation in biological systems.
+        "Brominated compounds": 'C(Br)',  # Potentially toxic; can exhibit endocrine disruption properties.
+        "Acyl halide": 'C(=O)Cl',  # Highly reactive; should be avoided due to reactivity and potential side effects.
+        "Benzyl alcohol": 'C(C1=CC=CC=C1)(O)',  # Can be metabolized to toxic metabolites.
+        "Thiocarbonyl group": 'C(=S)C',
+        # Potentially toxic; can exhibit reactive properties, affecting biological systems.
+        "Aniline": 'c1ccc(N)cc1',  # Can be mutagenic; requires caution due to potential carcinogenicity and toxicity.
+        "Acid halide": 'C(=O)X',
+        # Where X = F, Cl, Br, I; highly reactive; should be avoided due to reactivity and potential side effects.
+        "Iodinated compounds": 'C(I)',
+        # Generally avoided due to associated toxicity; used cautiously in specific applications.
+        "Hydrazine": 'N=N',  # Highly reactive and toxic; should be avoided due to instability and health risks.
+        "Nitro group": 'N(=O)(=O)C',  # Often toxic; should be avoided due to potential for carcinogenicity.
+        "Cyanide": 'C#N',  # Highly toxic; should be avoided in drug design due to safety concerns.
+        "Diazo group": 'N=N',  # Highly reactive; should be avoided due to stability issues and potential explosiveness.
+        "Isocyanate": 'C(=O)N=',  # Highly reactive; significant safety risks; should be avoided in drug design.
+        "Heavy metal": '[Pb]|[Hg]|[Cd]',  # Highly toxic; should be avoided in drug design due to severe health risks.
+        "Azide": 'N=N=N',  # Highly explosive; should be avoided in drug design due to instability.
+        "Peroxide": 'O-O',  # Highly reactive; generally avoided due to potential for decomposition and toxicity.
+        "Benzidine": 'c1ccc(N=N)c2ccccc2',  # Known carcinogen; should be avoided due to significant health risks.
+        "Chlorinated hydrocarbons": 'C(Cl)(C)(C)',
+        # Toxic; associated with various health risks and environmental concerns.
+        "Dimethylformamide (DMF)": 'C(N(C)C)(C)=O',
+        # Toxic solvent; should be used with caution due to safety concerns.
+        "Selenium compounds": 'Se',
+        # Some can be toxic; should be avoided in drug design unless specific activity is desired.
+        "Formamide": 'C(=O)N',  # Potentially toxic; should be used cautiously due to associated health risks.
+        "Dioxin": 'C1=C(C2=C(C=C1)O)C(=O)C=C2',  # Highly toxic; should be avoided due to carcinogenic properties.
+        "Vinyl chloride": 'C=C(Cl)',  # Known carcinogen; should be avoided due to health risks.
+        "Nitrosamines": 'N(=O)(C)',  # Carcinogenic; should be avoided due to significant safety concerns.
+        "Aromatic amine": 'c1ccc(N)cc1',  # Can be mutagenic; requires caution due to potential for adverse effects.
+        "Triazene": 'N=N-N',
+        # Sometimes acceptable; can be used in certain drug designs but may be reactive and require careful handling.
+        "Aromatic hydroxylamine": 'c1cc(N(O)C)cc1',
+        # Sometimes acceptable; useful in drug design for specific interactions, but can be toxic and reactive under certain conditions.
+
+        ##doi: 10.1007/978-1-4939-7899-1_13
+        "1,2-Dicarbonyls": '[C;X3](=O)([C;X3](=O))',  # Generally avoided; can be reactive and lead to side effects.
+        "Acyl Halides": '[F,Cl,Br,I][C;X3]=[O,S]',
+        # Highly reactive; typically avoided due to instability and potential toxicity.
+        "Aldehydes": '[#6][C;H1]=[O;X1]',  # Sometimes acceptable; useful in synthesis, but can be toxic and reactive.
+        "Alkyl Halides, P/S Halides, Mustards": '[Cl,Br,I][P,S,C&H2&X4,C&H3&X4]',
+        # Generally avoided; potential for reactivity and toxicity.
+        "Alkyl Sulfonates, Sulfate Esters": '[#6]O[S;X4](=O)=O',
+        # Sometimes acceptable; can serve as leaving groups, but may be reactive.
+        "Alpha-halocarbonyls": '[#6][C;X3](=[O;X1])-[C;H1,H2]-[F,Cl,Br,I]',
+        # Generally avoided; high reactivity and potential toxicity.
+        "Alpha-Beta Unsaturated Nitriles": '[#6]=[#6]C#N',
+        # Sometimes acceptable; can be useful in certain drug designs, but caution required.
+        "Anhydride": '[O;X2]([CX3,S,P]=O)([CX3,S,P]=O)',  # Generally avoided; reactive and may cause side effects.
+        "Azides": '[#6][N;X2]=[N;X2]=[N;X1]',  # Generally avoided; highly explosive and reactive.
+        "Beta-Carbonyl Quaternary Nitrogen": '[C;X3](=O)[C][N,n;X4]',
+        # Sometimes acceptable; useful in certain contexts but requires caution.
+        "Beta-Heterosubstituted Carbonyls": '[O;X1]=C[C;H2]C[F,Cl,Br,I]',
+        # Generally avoided; may lead to instability and toxicity.
+        "Carbodiimides": '[#6][N;X2]=[C;X2]=[N;X2][#6]',
+        # Sometimes acceptable; useful in peptide synthesis but can be reactive.
+        "Diazos, Diazoniums": '[#6]~[NX2;+0,+1]~[NX1;−1,+1,+0]',
+        # Generally avoided; high reactivity and stability issues.
+        "Disulfides": '[S;X2]~[S;X2]',
+        # Sometimes acceptable; can be beneficial in drug design, but may cause stability issues.
+        "Epoxides, Thioepoxides, Aziridines": '[O,N,S;X2;r3](C)C',
+        # Sometimes acceptable; useful in synthetic chemistry but can be reactive.
+        "Formates": '[O;X2][C;H1]=O',  # Sometimes acceptable; can serve as intermediates in synthesis.
+        "Halopyrimidines": '[F,Cl,Br,I]c(nc)nc',
+        # Sometimes acceptable; used in some drug designs, but caution is advised.
+        "Heteroatom-Heteroatom Single Bonds": '[O,N,S;X2]~[O,N,S;X2]',
+        # Generally acceptable; often found in bioactive compounds.
+        "Imines (Schiff’s Base)": '[N;X2]([!#1])=[C;X3][C;H2,H3]',
+        # Sometimes acceptable; can be useful for specific interactions in drug design.
+        "Isocyanates, Isothiocyanates": '[#6][N;X2]=C=[O,S&X1]',  # Generally avoided; highly reactive and can be toxic.
+        "Isonitriles": '[#6][N;X2]#[C;X1]',
+        # Sometimes acceptable; can be used in specific cases, but requires caution.
+        "Michael Acceptors": '[#6]=[#6][#6,#16]=[O]',
+        # Sometimes acceptable; useful in certain drug design contexts, but may be reactive.
+        "Nitroaromatic": '[c;X3][$([NX3](=O)=O),$([NX3+](=O)[O−])]',
+        # Generally avoided; can be toxic and carcinogenic.
+        "Nitrosos, Nitrosamines": '[#6,#7][N;X2](=O)',  # Generally avoided; highly toxic and carcinogenic.
+        "Perhalomethylketones": '[#6][C;X3](=O)[C;X4]([F,Cl,Br,I])([F,Cl,Br,I])[F,Cl,Br,I]',
+        # Generally avoided; highly reactive and toxic.
+        "Phosphines, Phosphoranes": '[#6][#15&X3,#15&X5]([#6])~[#6]',
+        # Sometimes acceptable; can be used in synthesis but may have stability issues.
+        "Phosphinyl Halides": '[P;X3][Cl,Br,I]',  # Generally avoided; can be reactive and lead to side effects.
+        "Reactive Cyanides": 'N#C[C&X4,C&X3]~[O&X1,O&H1&X2]',  # Highly toxic; should be avoided in drug design.
+        "Sulfenyl, Sulfinyl, Sulfonyl Halides": '[F,Cl,Br,I][$([SX2]),$([S;X3]=O),$([S;X4](=O)=O)]',
+        # Generally avoided; potential for reactivity and toxicity.
+        "Thiocyanate": '[#6][S]C#N',  # Generally avoided; highly toxic and should be avoided in drug design.
+        "Thioesters": '*SC(=O)*',
+        # Sometimes acceptable; can be useful in specific contexts, but may have stability issues.
+        "Thiourea": '[SX1]~C([N&!R&X3,N&!R&X2])[N&!R&X3,N&!R&X2]',
+        # Sometimes acceptable; can be beneficial in drug design but requires caution.
+        "Vinyl Halides": '[C;X2]=[C;X2]-[F,Cl,Br,I]',  # Generally avoided; potential for reactivity and toxicity.
+    }
+
+
+    # Function to check for functional groups and categorize them
+    def check_functional_groups(mol):
+        matched_groups = {
+            'acceptable': [],
+            'acceptable_with_caution': [],
+            'toxic': []
+        }
+
+        functional_groups = {**acceptable_groups, **acceptable_with_caution_groups, **toxic_groups}
+
+        for group_name, pattern in functional_groups.items():
+            if pattern is None:
+                continue  # Skip this iteration if pattern is None
+
+            # Convert SMARTS pattern to a RDKit Mol object
+            smarts_mol = Chem.MolFromSmarts(pattern)
+            if smarts_mol is None:
+                print(f"Warning: Invalid SMARTS pattern for {group_name}")
+                continue  # Skip invalid SMARTS patterns
+
+            # Check for substructure match
+            if mol.HasSubstructMatch(smarts_mol):
+                if group_name in acceptable_groups:  # Define acceptable_groups based on your criteria
+                    matched_groups['acceptable'].append(group_name)
+                elif group_name in acceptable_with_caution_groups:  # Define sometimes_acceptable_groups
+                    matched_groups['acceptable_with_caution'].append(group_name)
+                else:  # Assume toxic if it doesn't fit the above
+                    matched_groups['toxic'].append(group_name)
+
+        return matched_groups
+
+
+    # Generate SMILES from generated molecules
+    generated_smiles = [Chem.MolToSmiles(m) for m in molecules if m]
+
+    # Create DataFrame with SMILES
+    maindf = pd.DataFrame({'smiles': generated_smiles})
+    st.info(f'Total compounds before removing duplicates: {len(maindf)}')
+
+    # Add molecule column
+    PandasTools.AddMoleculeColumnToFrame(maindf, 'smiles', 'molecule')
+
+    # Calculate molecular descriptors
+    maindf['rot_bonds'] = maindf.molecule.apply(rdMolDescriptors.CalcNumRotatableBonds)
+    maindf['logP'] = maindf.molecule.apply(Crippen.MolLogP)
+    maindf['HBD'] = maindf.molecule.apply(rdMolDescriptors.CalcNumHBD)
+    maindf['HBA'] = maindf.molecule.apply(rdMolDescriptors.CalcNumHBA)
+    maindf['mw'] = maindf.molecule.apply(rdMolDescriptors.CalcExactMolWt)
+    maindf['inchi'] = maindf.molecule.apply(Chem.MolToInchiKey)
+
+    # Remove duplicates
+    maindf.drop_duplicates(subset='inchi', inplace=True)
+    st.success(f'Total compounds after removing duplicates: {len(maindf)}')
+
+    # Load PAINS filters
+    params = FilterCatalog.FilterCatalogParams()
+    params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_A)
+    params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_B)
+    params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_C)
+    catalog = FilterCatalog.FilterCatalog(params)
+
+    # Check PAINS alerts for each molecule
+    maindf['pains_alert'] = None  # Create a new column for PAINS alerts
+
+    for i, row in maindf.iterrows():
+        mol = row['molecule']  # Access the molecule from the DataFrame
+        if mol is not None:
+            entry = catalog.GetFirstMatch(mol)
+            if entry:
+                maindf.at[i, 'pains_alert'] = entry.GetDescription()  # Store PAINS alert description
+            else:
+                maindf.at[i, 'pains_alert'] = "No PAINS alert"
+
+    # Display PAINS alerts
+    pains_filtered = maindf[maindf['pains_alert'] != "No PAINS alert"]
+    if not pains_filtered.empty:
+        st.info("PAINS (Pan-Assay Interference Compounds) Alerts found:")
+        st.dataframe(pains_filtered[['smiles', 'pains_alert']])
+    else:
+        st.info("No PAINS (Pan-Assay Interference Compounds) alerts found.")
+
+    # Remove molecules with PAINS alerts
+    pains_free_df = maindf[maindf['pains_alert'] == "No PAINS alert"]
+
+    # Display total compounds after removing PAINS alerts
+    st.success(f'Total compounds after removing PAINS alerts: {len(pains_free_df)}')
+
+
+    # Categorize functional groups
+    def categorize_functional_groups(smiles: str) -> dict:
+        mol = Chem.MolFromSmiles(smiles)
+        return check_functional_groups(mol)
+
+
+    # Create separate columns for each category of functional groups in the filtered dataframe
+    pains_free_df['acceptable'] = pains_free_df['smiles'].apply(
+        lambda sm: ', '.join(check_functional_groups(Chem.MolFromSmiles(sm))['acceptable']))
+    pains_free_df['acceptable_with_caution'] = pains_free_df['smiles'].apply(
+        lambda sm: ', '.join(check_functional_groups(Chem.MolFromSmiles(sm))['acceptable_with_caution']))
+    pains_free_df['toxic'] = pains_free_df['smiles'].apply(
+        lambda sm: ', '.join(check_functional_groups(Chem.MolFromSmiles(sm))['toxic']))
+
+    # Add a summary column based on functional group categories
+    pains_free_df['classification'] = pains_free_df.apply(
+        lambda row: 'Pharmacophoric' if row['acceptable'] and not row['toxic'] else
+        ('Toxicophoric' if row['toxic'] and (row['acceptable'] or row['acceptable_with_caution']) else
+         ('Sometimes Acceptable' if row['acceptable_with_caution'] and not (
+                 row['acceptable'] or row['toxic']) else 'no_match')),
+        axis=1
+    )
+
+    # Display the functional group categorization
+    st.subheader("Classification of Generated Molecules based on their Functional Groups")
+
+
+    # st.dataframe(pains_free_df[['smiles', 'classification', 'acceptable', 'acceptable_with_caution', 'toxic']])
+
+    # Function to generate molecule images
+    def get_molecular_structure(mol):
+        if mol is None:
+            return None
+        img = Draw.MolToImage(mol, size=(150, 150))  # Create an image of the molecule
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='PNG')  # Save to bytes
+        img_byte_arr.seek(0)
+        return img_byte_arr.getvalue()  # Return bytes for the image
+
+
+    # Add molecule image column to the DataFrame
+    pains_free_df['molecular_structure'] = pains_free_df['molecule'].apply(lambda x: get_molecular_structure(x))
+
+
+    # Display filtered DataFrame with images in Streamlit
+    def display_dataframe_with_images(df, download_key):
+        # Create a new DataFrame for display with 'molecular_structure' first
+        display_df = df[
+            ['molecular_structure', 'smiles', 'classification', 'acceptable', 'acceptable_with_caution',
+             'toxic']].copy()
+
+        # Convert images to a format that can be displayed in Streamlit
+        display_df['molecular_structure'] = display_df['molecular_structure'].apply(
+            lambda
+                img: f'<img src="data:image/png;base64,{base64.b64encode(img).decode()}" width="150" height="150"/>' if img is not None else ""
+        )
+
+        # Use st.markdown to render the DataFrame as HTML
+        st.markdown(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+
+        # Prepare the DataFrame for CSV export (removing image column)
+        csv_df1 = df[['smiles', 'classification', 'acceptable', 'acceptable_with_caution', 'toxic']]
+
+        # Create CSV string
+        csv = csv_df1.to_csv(index=False)
+
+        # Download link
+        st.download_button(
+            label="Download data as CSV",
+            data=csv,
+            file_name='classified_data.csv',
+            mime='text/csv',
+            key=download_key  # Unique key for the download button
+        )
+
+
+    # Call the function to display the DataFrame with unique keys
+    display_dataframe_with_images(pains_free_df, download_key="download_button_1")
+
+    # Flatten and count occurrences of functional groups
+    acceptable_groups_flat_list = [group for sublist in pains_free_df['acceptable'].str.split(', ') for group in sublist
+                                   if group]
+    acceptable_with_caution_flat_list = [group for sublist in pains_free_df['acceptable_with_caution'].str.split(', ')
+                                         for group in sublist if group]
+    toxic_groups_flat_list = [group for sublist in pains_free_df['toxic'].str.split(', ') for group in sublist if group]
+
+    # Count the occurrences of each functional group
+    acceptable_groups_counts = pd.Series(acceptable_groups_flat_list).value_counts().reset_index()
+    acceptable_with_caution_counts = pd.Series(acceptable_with_caution_flat_list).value_counts().reset_index()
+    toxic_groups_counts = pd.Series(toxic_groups_flat_list).value_counts().reset_index()
+
+    acceptable_groups_counts.columns = ['Pharmacophoric', 'count']
+    acceptable_with_caution_counts.columns = ['Toxicophoric', 'count']
+    toxic_groups_counts.columns = ['Sometimes Acceptable', 'count']
+
+    # Display functional group counts
+    st.subheader("Functional Groups Count")
+    st.dataframe(acceptable_groups_counts)
+    st.dataframe(acceptable_with_caution_counts)
+    st.dataframe(toxic_groups_counts)
+
+    # Apply custom filters
+    filtered_df = pains_free_df[
+        (pains_free_df['rot_bonds'] <= 3) &
+        (pains_free_df['logP'] <= 5) &
+        (pains_free_df['HBD'] <= 5) &
+        (pains_free_df['HBA'] <= 10) &
+        (pains_free_df['mw'] <= 500) &
+        (pains_free_df['classification'] == 'Pharmacophoric')
+        ]
+
+
+    # Visualize all ring systems in the generated structures
+    def find_ring_systems(mol):
+        if mol is None:
+            return []
+        ring_info = mol.GetRingInfo()
+        ring_systems = []
+        for ring in ring_info.AtomRings():
+            ring_smiles = Chem.MolFragmentToSmiles(mol, ring)
+            ring_systems.append(ring_smiles)
+        return list(set(ring_systems))  # Return unique ring systems
+
+
+    # Apply the ring system finder
+    filtered_df['ring_systems'] = filtered_df['molecule'].apply(find_ring_systems)
+
+    # Flatten the list of ring systems into a single list for counting
+    ring_list = list(chain(*filtered_df.ring_systems.values))
+    ring_series = pd.Series(ring_list)
+    ring_df = pd.DataFrame(ring_series.value_counts()).reset_index()
+    ring_df.columns = ["SMILES", "Count"]
+
+    # Display ring system counts
+    st.subheader("Ring System Counts:")
+    st.dataframe(ring_df)
+
+    # Visualize filtered molecules
+    filtered_mols = [m for m in filtered_df['molecule'] if m is not None]
+
+    # Display filtered results
+    st.subheader("Filtered Pharmacophoric Compounds Data")
+    st.success(f'Final Total Pharmacophoric Compounds after Screening with Lipinskis Rule of Five : {len(filtered_df)}')
+
+    # Add ring system information to DataFrame
+    maindf['ring_systems'] = maindf.molecule.apply(find_ring_systems)
+
+    # Assuming 'filtered_df' is your DataFrame and 'molecule' column contains RDKit molecule objects
+    filtered_df['Molecular_structure'] = filtered_df['molecule'].apply(lambda x: get_molecular_structure(x))
+
+
+    # Display filtered DataFrame with images in Streamlit
+    def display_dataframe_with_images(df):
+        # Create a new DataFrame for display with 'molecular_structure' first
+        display_df = df[
+            ['Molecular_structure', 'smiles', 'rot_bonds', 'logP', 'HBD', 'HBA', 'mw', 'inchi',
+             'classification', 'ring_systems']].copy()
+
+        # Convert images to a format that can be displayed in Streamlit
+        display_df['Molecular_structure'] = display_df['Molecular_structure'].apply(
+            lambda
+                img: f'<img src="data:image/png;base64,{base64.b64encode(img).decode()}" width="150" height="150"/>' if img is not None else ""
+        )
+
+        # Use st.markdown to render the DataFrame as HTML
+        st.markdown(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+
+        # Prepare the DataFrame for CSV export (removing image column)
+        csv_df = df[['smiles', 'rot_bonds', 'logP', 'HBD', 'HBA', 'mw', 'inchi', 'classification',
+                     'ring_systems']]
+
+        # Create CSV string
+        csv2 = csv_df.to_csv(index=False)
+
+        # Download link with a unique key
+        st.download_button(
+            label="Download data as CSV",
+            data=csv2,
+            file_name='screened_data.csv',
+            mime='text/csv',
+        )
+
+
+    # Display filtered DataFrame with images and a unique key
+    display_dataframe_with_images(filtered_df)
