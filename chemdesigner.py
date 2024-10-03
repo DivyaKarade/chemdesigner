@@ -859,7 +859,7 @@ if st.sidebar.button("✨ Generate Molecules"):
     )
 
     # Display the functional group categorization
-    st.subheader("Classification of Generated Molecules based on their Functional Groups")
+    st.subheader("Classification of Virtual Library of Novel Molecules based on their Functional Groups")
 
 
     # st.dataframe(pains_free_df[['smiles', 'classification', 'acceptable', 'acceptable_with_caution', 'toxic']])
@@ -930,11 +930,22 @@ if st.sidebar.button("✨ Generate Molecules"):
     acceptable_with_caution_counts.columns = ['Toxicophoric', 'count']
     toxic_groups_counts.columns = ['Sometimes Acceptable', 'count']
 
-    # Display functional group counts
+    # Display functional group counts using columns
     st.subheader("Functional Groups Count")
-    st.dataframe(acceptable_groups_counts)
-    st.dataframe(acceptable_with_caution_counts)
-    st.dataframe(toxic_groups_counts)
+    row1_1, row1_2, row1_3 = st.columns([1, 1, 1])  # Equal width for each column
+
+    # Display each dataframe in a separate column
+    with row1_1:
+        st.warning("Pharmacophoric Groups")
+        st.dataframe(acceptable_groups_counts.head(), use_container_width=True)  # Show only the head
+
+    with row1_2:
+        st.warning("Toxicophoric Groups")
+        st.dataframe(acceptable_with_caution_counts.head(), use_container_width=True)
+
+    with row1_3:
+        st.warning("Sometimes Acceptable Groups")
+        st.dataframe(toxic_groups_counts.head(), use_container_width=True)
 
     # Apply custom filters
     filtered_df = pains_free_df[
@@ -976,7 +987,7 @@ if st.sidebar.button("✨ Generate Molecules"):
     filtered_mols = [m for m in filtered_df['molecule'] if m is not None]
 
     # Display filtered results
-    st.subheader("Filtered Pharmacophoric Compounds Data")
+    st.subheader("Virtually Screened Molecular Data")
     st.success(f'Final Total Pharmacophoric Compounds after Screening with Lipinskis Rule of Five : {len(filtered_df)}')
 
     # Add ring system information to DataFrame
