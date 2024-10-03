@@ -14,7 +14,7 @@ import base64
 # Page expands to full width
 st.set_page_config(page_title='AIDrugApp', page_icon='🌐', layout="wide")
 
-st.title('ChemDesigner: Molecule Graph Generator')
+st.title('ChemDesigner: AI-Powered Virtual Molecule Design')
 st.success(
     "This module of [**AIDrugApp v1.2.6**](https://aidrugapp.streamlit.app/) uses Generative Adversarial Network with Gradient Penalty algorithms (WGAN-GP) and Graph Neural Network (GNN) for generating new chemical structures.")
 
