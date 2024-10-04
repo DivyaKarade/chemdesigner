@@ -21,6 +21,7 @@ st.success(
 expander_bar = st.expander("👉 More information")
 expander_bar.markdown("""
         * **Python libraries:** Tensorflow, Keras, RDKit, streamlit, pandas, numpy
+        * *** **Publication:** Divya Karade. September 2024. ChemDesigner: An AI-Powered Symphony for Drug Discovery - Generating and Screening Molecules with GANs and GNNs. [Medium Blog](https://medium.com/@divya.karade/chemdesigner-an-ai-powered-symphony-for-drug-discovery-generating-and-screening-molecules-with-93f07ac47c6a)
         """)
 
 expander_bar = st.expander("👉 How to use ChemDesigner?")
