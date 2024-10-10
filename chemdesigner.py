@@ -12,6 +12,9 @@ from itertools import chain
 from rdkit.Chem import FilterCatalog
 from PIL import Image
 import base64
+import warnings
+
+warnings.simplefilter(action="ignore", category=FutureWarning)
 
 # Page expands to full width
 st.set_page_config(page_title='AIDrugApp', page_icon='🌐', layout="wide")
