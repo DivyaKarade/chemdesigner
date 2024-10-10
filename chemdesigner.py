@@ -1,5 +1,7 @@
 import streamlit as st
 from rdkit import Chem, RDLogger
+from rdkit.Chem import QED
+from rdkit.Contrib.SA_Score.sascorer import calculateScore
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -21,7 +23,7 @@ st.success(
 expander_bar = st.expander("👉 More information")
 expander_bar.markdown("""
         * **Python libraries:** Tensorflow, Keras, RDKit, streamlit, pandas, numpy
-        * **Publication:** Divya Karade. September 2024. ChemDesigner: An AI-Powered Symphony for Drug Discovery - Generating and Screening Molecules with GANs and GNNs. [Medium Blog](https://medium.com/@divya.karade/chemdesigner-an-ai-powered-symphony-for-drug-discovery-generating-and-screening-molecules-with-93f07ac47c6a)
+        * *** **Publication:** Divya Karade. September 2024. ChemDesigner: An AI-Powered Symphony for Drug Discovery - Generating and Screening Molecules with GANs and GNNs. [Medium Blog](https://medium.com/@divya.karade/chemdesigner-an-ai-powered-symphony-for-drug-discovery-generating-and-screening-molecules-with-93f07ac47c6a)
         """)
 
 expander_bar = st.expander("👉 How to use ChemDesigner?")
@@ -550,7 +552,7 @@ if st.sidebar.button("✨ Generate Molecules"):
 
     # Generate new molecules using the trained generator
     molecules = sample(wgan.generator, batch_size=48)
-    st.subheader("Sample Novel Generated Molecules")
+    st.subheader("Sample Virtual Library of Novel Generated Molecules")
 
     # Display the generated molecules in a grid
     st.image(
@@ -998,11 +1000,36 @@ if st.sidebar.button("✨ Generate Molecules"):
     filtered_df['Molecular_structure'] = filtered_df['molecule'].apply(lambda x: get_molecular_structure(x))
 
 
+    # Function to calculate molecular properties
+    def calculate_properties(smiles):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES string: '{smiles}'")
+
+        try:
+            sas = calculateScore(mol)  # Calculate Synthetic Accessibility Score
+        except Exception as e:
+            sas = None
+            print(f"Error calculating SAS for {smiles}: {e}")
+
+        try:
+            qed = QED.qed(mol)  # Calculate Qualitative Estimate of Drug-likeness
+        except Exception as e:
+            qed = None
+            print(f"Error calculating QED for {smiles}: {e}")
+
+        return sas, qed
+
+
+    # Apply the calculate_properties function to each SMILES in the dataset
+    filtered_df[["SAS", "QED"]] = filtered_df["smiles"].apply(lambda s: pd.Series(calculate_properties(s)))
+
+
     # Display filtered DataFrame with images in Streamlit
     def display_dataframe_with_images(df):
         # Create a new DataFrame for display with 'molecular_structure' first
         display_df = df[
-            ['Molecular_structure', 'smiles', 'rot_bonds', 'logP', 'HBD', 'HBA', 'mw', 'inchi',
+            ['Molecular_structure', 'smiles', 'rot_bonds', 'logP', 'HBD', 'HBA', 'mw', 'SAS', 'QED', 'inchi',
              'classification', 'ring_systems']].copy()
 
         # Convert images to a format that can be displayed in Streamlit
@@ -1015,7 +1042,7 @@ if st.sidebar.button("✨ Generate Molecules"):
         st.markdown(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
         # Prepare the DataFrame for CSV export (removing image column)
-        csv_df = df[['smiles', 'rot_bonds', 'logP', 'HBD', 'HBA', 'mw', 'inchi', 'classification',
+        csv_df = df[['smiles', 'rot_bonds', 'logP', 'HBD', 'HBA', 'mw', 'SAS', 'QED', 'inchi', 'classification',
                      'ring_systems']]
 
         # Create CSV string
