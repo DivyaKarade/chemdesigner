@@ -7,10 +7,12 @@ import tensorflow as tf
 from tensorflow import keras
 import pandas as pd
 import io  # Imported io module to capture model summaries
-from rdkit.Chem import Draw, rdMolDescriptors, Crippen, PandasTools
+from rdkit.Chem import Draw, rdMolDescriptors, Crippen, PandasTools, rdMolAlign, AllChem
 from itertools import chain
 from rdkit.Chem import FilterCatalog
-from PIL import Image
+import selfies as sf
+import random
+import matplotlib.pyplot as plt
 import base64
 import warnings
 
@@ -46,6 +48,18 @@ st.sidebar.header('⚙️ USER INPUT PANEL')
 
 # Disable RDKit logging
 RDLogger.DisableLog("rdApp.*")
+
+# Set seeds for reproducibility
+random.seed(42)
+np.random.seed(42)
+tf.random.set_seed(42)
+
+# Optional: Set environment variables for deterministic behavior
+import os
+
+os.environ['OMP_NUM_THREADS'] = '1'  # Limit to 1 thread
+os.environ['TF_NUM_INTRAOP_THREADS'] = '1'  # For TensorFlow
+os.environ['TF_DETERMINISTIC_OPS'] = '1'  # Ensure deterministic operations
 
 # Sidebar for CSV upload
 with st.sidebar:
@@ -127,13 +141,44 @@ else:
     st.info('Awaiting .csv file to be uploaded')
     smiles_list = []  # Initialize as an empty list if no file is uploaded
 
-# Let's look at a molecule of the dataset
-if len(smiles_list) > 0:  # Explicitly check if the list is not empty
-    smiles = smiles_list[0]  # Select the first SMILES string from the list
-    molecule = Chem.MolFromSmiles(smiles)
+
+# Function to convert SMILES to SELFIES
+def convert_smiles_to_selfies(smiles):
+    try:
+        selfies_str = sf.encoder(smiles)
+        return selfies_str
+    except Exception as e:
+        print(f"Failed to convert SMILES '{smiles}' to SELFIES: {e}")
+        return None
+
+
+# Function to convert SELFIES back to SMILES (for RDKit processing)
+def convert_selfies_to_smiles(selfies_str):
+    try:
+        smiles = sf.decoder(selfies_str)
+        return smiles
+    except Exception as e:
+        print(f"Failed to convert SELFIES back to SMILES: {e}")
+        return None
+
+
+# Display first molecule and its conversion to SELFIES
+if len(smiles_list) > 0:  # Check if SMILES list is not empty
+    smiles = smiles_list[0]  # Select the first SMILES string
+    selfies_str = convert_smiles_to_selfies(smiles)  # Convert SMILES to SELFIES
+
+# Now let's use SELFIES for further tasks or decision-making
+# We will decode SELFIES to SMILES before RDKit processes them
+# Convert SMILES to RDKit Mol objects (ignoring failed encodings)
+molecules = [
+    Chem.MolFromSmiles(convert_selfies_to_smiles(selfies_str))
+    for sm in smiles_list
+    if (selfies_str := convert_smiles_to_selfies(sm))
+       and convert_selfies_to_smiles(selfies_str)
+]
 
 # Convert SMILES to RDKit Mol objects
-molecules = [Chem.MolFromSmiles(sm) for sm in smiles_list if Chem.MolFromSmiles(sm)]
+#molecules = [Chem.MolFromSmiles(sm) for sm in smiles_list if Chem.MolFromSmiles(sm)]
 
 # Ensure all atoms in the SMILES strings are in the atom mapping
 for mol in molecules:
@@ -518,9 +563,10 @@ if st.sidebar.button("✨ Generate Molecules"):
     # Initialize the WGAN model
     wgan = GraphWGAN(generator, discriminator, discriminator_steps=1)
 
+    # Compile the WGAN model with loss functions and optimizers
     wgan.compile(
         optimizer_generator=tf.keras.optimizers.Adam(5e-4),
-        optimizer_discriminator=tf.keras.optimizers.Adam(5e-4),
+        optimizer_discriminator=tf.keras.optimizers.Adam(5e-4)
     )
 
     st.subheader("Training the WGAN-GP Model")
@@ -529,8 +575,9 @@ if st.sidebar.button("✨ Generate Molecules"):
     progress_bar = st.progress(0)
     for epoch in range(epochs):
         wgan.fit([adjacency_tensor, feature_tensor], epochs=1, batch_size=batch_size)
-        progress_bar.progress((epoch + 1) / epochs)
-        st.write(f"Completed epoch {epoch + 1}/{epochs}")
+        progress_percentage = int(((epoch + 1) / epochs) * 100)
+        progress_bar.progress(progress_percentage)
+        st.write(f"Completed epoch {epoch + 1}/{epochs} - Progress: {progress_percentage}%")
 
     st.success("Training completed!")
 
@@ -553,19 +600,51 @@ if st.sidebar.button("✨ Generate Molecules"):
         ]
 
 
+    # Function to validate and convert molecules to SELFIES format
+    def convert_to_selfies(molecule):
+        try:
+            # Convert the molecule to SELFIES string
+            selfies_str = sf.encoder(Chem.MolToSmiles(molecule))
+            # Convert back to molecule to check validity
+            valid_smiles = sf.decoder(selfies_str)
+            valid_molecule = Chem.MolFromSmiles(valid_smiles)
+            if valid_molecule is not None:
+                return valid_molecule, selfies_str
+        except Exception as e:
+            return None, None
+        return None, None
+
+
     # Generate new molecules using the trained generator
     molecules = sample(wgan.generator, batch_size=48)
     st.subheader("Sample Virtual Library of Novel Generated Molecules")
 
-    # Display the generated molecules in a grid
-    st.image(
-        Draw.MolsToGridImage(
-            [m for m in molecules if m is not None][:num_samples],
-            molsPerRow=5,
-            subImgSize=(150, 150),
-            returnPNG=False
+    # Convert the generated molecules to SELFIES and validate
+    validated_molecules = []
+    selfies_strings = []
+
+    for mol in molecules:
+        valid_molecule, selfies_str = convert_to_selfies(mol)
+        if valid_molecule is not None:
+            validated_molecules.append(valid_molecule)
+            selfies_strings.append(selfies_str)
+
+    # Display the validated molecules from SELFIES in a grid
+    if validated_molecules:
+        st.image(
+            Draw.MolsToGridImage(
+                validated_molecules[:num_samples],
+                molsPerRow=5,
+                subImgSize=(150, 150),
+                returnPNG=False
+            )
         )
-    )
+    else:
+        st.warning("No valid molecules to display.")
+
+    # Output validated SELFIES strings for further processing or storage
+    st.write("Validated SELFIES strings:")
+    st.write(selfies_strings)
 
     # Dictionary of functional group SMARTS patterns
     acceptable_groups = {
@@ -786,7 +865,7 @@ if st.sidebar.button("✨ Generate Molecules"):
 
 
     # Generate SMILES from generated molecules
-    generated_smiles = [Chem.MolToSmiles(m) for m in molecules if m]
+    generated_smiles = [Chem.MolToSmiles(m) for m in validated_molecules if m is not None]
 
     # Create DataFrame with SMILES
     maindf = pd.DataFrame({'smiles': generated_smiles})
@@ -955,7 +1034,7 @@ if st.sidebar.button("✨ Generate Molecules"):
 
     # Apply custom filters
     filtered_df = pains_free_df[
-        (pains_free_df['rot_bonds'] <= 3) &
+        (pains_free_df['rot_bonds'] <= 10) &
         (pains_free_df['logP'] <= 5) &
         (pains_free_df['HBD'] <= 5) &
         (pains_free_df['HBA'] <= 10) &
@@ -1026,6 +1105,44 @@ if st.sidebar.button("✨ Generate Molecules"):
 
     # Apply the calculate_properties function to each SMILES in the dataset
     filtered_df[["SAS", "QED"]] = filtered_df["smiles"].apply(lambda s: pd.Series(calculate_properties(s)))
+
+
+    # Scatter plot for SAS vs QED
+    def create_scatter_plot(df):
+        plt.figure(figsize=(10, 6))
+
+        # Define the conditions for categorizing the compounds
+        conditions = [
+            (df['SAS'] < 4) & (df['QED'] >= 0.6),  # Low SAS, High QED
+            (df['SAS'] >= 4) & (df['QED'] >= 0.6),  # Medium SAS, High QED
+            (df['SAS'] < 4) & (df['QED'] < 0.6),  # Low SAS, Low QED
+            (df['SAS'] >= 4) & (df['QED'] < 0.6)  # Medium SAS, Low QED
+        ]
+
+        categories = ['Low SAS, High QED', 'Medium SAS, High QED', 'Low SAS, Low QED', 'Medium SAS, Low QED']
+        colors = ['green', 'blue', 'red', 'orange']
+
+        for condition, category, color in zip(conditions, categories, colors):
+            plt.scatter(df.loc[condition, 'SAS'], df.loc[condition, 'QED'], label=category, alpha=0.6, edgecolors='w',
+                        s=100, color=color)
+
+        # Highlight optimal region
+        plt.axhline(y=0.6, color='grey', linestyle='--')
+        plt.axvline(x=4, color='grey', linestyle='--')
+
+        plt.title('Synthetic Accessibility (SAS) vs Quantitative Estimate of Drug-likeness (QED)')
+        plt.xlabel('Synthetic Accessibility Score (SAS)')
+        plt.ylabel('Quantitative Estimate of Drug-likeness (QED)')
+        plt.xlim(0, 10)  # Adjust the x-axis limits as necessary
+        plt.ylim(0, 1)  # Adjust the y-axis limits as necessary
+        plt.legend()
+        plt.grid()
+
+        st.pyplot(plt)
+
+
+    # Create the scatter plot
+    create_scatter_plot(filtered_df)
 
 
     # Display filtered DataFrame with images in Streamlit
