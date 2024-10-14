@@ -60,6 +60,7 @@ import os
 os.environ['OMP_NUM_THREADS'] = '1'  # Limit to 1 thread
 os.environ['TF_NUM_INTRAOP_THREADS'] = '1'  # For TensorFlow
 os.environ['TF_DETERMINISTIC_OPS'] = '1'  # Ensure deterministic operations
+os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
 
 # Sidebar for CSV upload
 with st.sidebar:
